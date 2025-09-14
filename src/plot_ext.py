@@ -124,7 +124,7 @@ def calculate_errors(kinematics_data, dynamics_data, dof=4):
         ext_torque_nrmse = calculate_nrmse(leader_ext_torque, -follower_ext_torque)
         ext_torque_est_nrmse = calculate_nrmse(leader_ext_torque, -virtual_leader_ext_torque)
         pos_nrmse = calculate_nrmse(pos_des, pos_feedback)
-        pos_rms = calculate_rms(pos_feedback)
+        pos_rms = calculate_rms(pos_feedback - pos_feedback[0])
         leader_ext_rms = calculate_rms(leader_ext_torque)
         follower_ext_rms = calculate_rms(follower_ext_torque)
         leader_impedance = leader_ext_rms / pos_rms if pos_rms != 0 else float('inf')

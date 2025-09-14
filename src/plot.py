@@ -2,6 +2,8 @@ import matplotlib.pyplot as plt
 import os
 import sys
 import numpy as np
+import pandas as pd
+
 
 def read_config(file_path):
     kinematics_vars = []
@@ -85,7 +87,7 @@ def plot_all_vars(kinematics_data, dynamics_data, folder_name, dof=4):
     plt.tight_layout()
     plt.show()
 
-def calculate_nrmse(desired, feedback, normalization='range'):
+def calculate_nrmse(desired, feedback, normalization='mean'):
     rmse = np.sqrt(np.mean((desired - feedback) ** 2))
     if normalization == 'range':
         range_desired = np.max(desired) - np.min(desired)
@@ -96,6 +98,21 @@ def calculate_nrmse(desired, feedback, normalization='range'):
     else:
         raise ValueError("Normalization method must be 'range' or 'mean'.")
     return nrmse
+
+def calculate_rmse(desired, feedback):
+    """
+    Calculate the Root Mean Square Error (RMSE) between desired and feedback signals.
+    
+    Parameters:
+        desired (array-like): Desired values
+        feedback (array-like): Actual/feedback values
+    
+    Returns:
+        float: RMSE value
+    """
+    rmse = np.sqrt(np.mean((np.array(desired) - np.array(feedback)) ** 2))
+    return rmse
+
 
 def calculate_rms(signal):
     return np.sqrt(np.mean(np.square(signal)))
@@ -116,10 +133,11 @@ def calculate_errors(kinematics_data, dynamics_data, dof=4):
         ext_torque_nrmse = calculate_nrmse(leader_ext_torque, -follower_ext_torque)
 
         pos_nrmse = calculate_nrmse(pos_des, pos_feedback)
+        pos_rmse = calculate_rmse(pos_des, pos_feedback)
         pos_rms = calculate_rms(pos_feedback)
         leader_ext_rms = calculate_rms(leader_ext_torque)
         follower_ext_rms = calculate_rms(follower_ext_torque)
-        leader_impedance = leader_ext_rms / pos_rms if pos_rms != 0 else float('inf')
+        leader_impedance = leader_ext_rms / pos_rmse if pos_rms != 0 else float('inf')
 
         pos_nrmse_list.append(pos_nrmse)
         ext_torque_nrmse_list.append(ext_torque_nrmse)
@@ -152,6 +170,47 @@ def calculate_errors(kinematics_data, dynamics_data, dof=4):
     for joint, value in enumerate(follower_ext_rms_list):
         print(f"  Joint {joint+1}: {value:.4f}")
 
+def export_metrics_to_csv(kinematics_data, dynamics_data, out_path, joints=(1, 3)):
+    rows = []
+    for j in joints:
+        pos_des = kinematics_data['desired joint pos'][:, j]
+        pos_feedback = kinematics_data['feedback joint pos'][:, j]
+        leader_ext_torque = dynamics_data['leader external torque'][:, j]
+        follower_ext_torque = dynamics_data['follower external torque'][:, j]
+
+        pos_nrmse = calculate_nrmse(pos_des, pos_feedback)
+        ext_torque_nrmse = calculate_nrmse(leader_ext_torque, -follower_ext_torque)
+        pos_rmse = calculate_rmse(pos_des, pos_feedback)
+        leader_ext_rms = calculate_rms(leader_ext_torque)
+        leader_impedance = leader_ext_rms / pos_rmse if pos_rmse != 0 else float('inf')
+
+        rows.append({
+            "Joint": f"Joint {j+1}",
+            "nRMSE (position)": float(pos_nrmse),
+            "nRMSE (external torque)": float(ext_torque_nrmse),
+            "Leader impedance": float(leader_impedance),
+        })
+
+    df = pd.DataFrame(rows, columns=["Joint", "nRMSE (position)", "nRMSE (external torque)", "Leader impedance"])
+    df.to_csv(out_path, index=False)
+
+
+
+# def main(folder_name):
+#     base_folder = '../data'
+#     folder_path = os.path.join(base_folder, folder_name)
+
+#     config_file = os.path.join(folder_path, 'config.txt')
+#     kinematics_file = os.path.join(folder_path, 'kinematics.txt')
+#     dynamics_file = os.path.join(folder_path, 'dynamics.txt')
+
+#     kinematics_vars, dynamics_vars = read_config(config_file)
+#     kinematics_data = read_data(kinematics_file, kinematics_vars, dof=4)
+#     dynamics_data = read_data(dynamics_file, dynamics_vars, dof=4)
+
+#     plot_all_vars(kinematics_data, dynamics_data, folder_name, dof=4)
+#     calculate_errors(kinematics_data, dynamics_data, dof=4)
+
 def main(folder_name):
     base_folder = '../data'
     folder_path = os.path.join(base_folder, folder_name)
@@ -166,6 +225,13 @@ def main(folder_name):
 
     plot_all_vars(kinematics_data, dynamics_data, folder_name, dof=4)
     calculate_errors(kinematics_data, dynamics_data, dof=4)
+
+    # NEW: export Excel with Joint 2 & Joint 4 metrics
+    out_csv = os.path.join(folder_path, f"{folder_name}_metrics.csv")
+    export_metrics_to_csv(kinematics_data, dynamics_data, out_csv, joints=(1, 3))
+    print(f"Saved metrics to: {out_csv}")
+
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
