@@ -191,6 +191,6 @@ class Leader : public barrett::systems::System {
 
 
 
-        return u1;
+        return u4;
     };
 };
