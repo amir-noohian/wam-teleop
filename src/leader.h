@@ -1,11 +1,9 @@
 #pragma once
 #include <haptic_wrist/haptic_wrist.h>
-
 #include <boost/asio.hpp>
-
 #include "udp_handler.h"
 #include <barrett/detail/ca_macro.h>
-#include <barrett/systems.h>
+#include <barrett/systems/abstract/single_io.h>
 #include <barrett/thread/abstract/mutex.h>
 #include <barrett/units.h>
 
@@ -14,15 +12,24 @@ class Leader : public barrett::systems::System {
     BARRETT_UNITS_TEMPLATE_TYPEDEFS(DOF);
 
   public:
+    // Inputs from local WAM
     Input<jp_type> wamJPIn;
     Input<jv_type> wamJVIn;
-    Input<jt_type> extTorqueIn;
-    Output<jt_type> wamJPOutput;
+    Input<jt_type> extTorqueIn;   // may be undefined
+    Input<jt_type> wamGravIn;     // τ_g
+    Input<jt_type> wamDynIn;      // τ_dyn (feedforward)
+
+    // Outputs
+    Output<jt_type> wamJPOutput;     // control torque to local WAM
+    Output<jp_type> theirJPOutput;   // peer arm JP (for tracking/logging)
 
     enum class State { INIT, LINKED, UNLINKED };
 
-    explicit Leader(barrett::systems::ExecutionManager* em, haptic_wrist::HapticWrist* hw,
-                    const std::string& remoteHost, int rec_port = 5554, int send_port = 5555,
+    explicit Leader(barrett::systems::ExecutionManager* em,
+                    haptic_wrist::HapticWrist* hw,             // may be nullptr if no wrist device
+                    const std::string& remoteHost,
+                    int rec_port = 5555,                       // leader receives follower's 5555
+                    int send_port = 5554,                      // leader sends on 5554
                     const std::string& sysName = "Leader")
         : System(sysName)
         , theirJp(0.0)
@@ -32,40 +39,49 @@ class Leader : public barrett::systems::System {
         , wamJPIn(this)
         , wamJVIn(this)
         , extTorqueIn(this)
+        , wamGravIn(this)
+        , wamDynIn(this)
         , wamJPOutput(this, &jtOutputValue)
-        , udp_handler(remoteHost, send_port, rec_port)
+        , theirJPOutput(this, &theirJPOutputValue)
+        , udp_handler(remoteHost, send_port, rec_port)  // (tx, rx)
         , hw(hw)
-        , state(State::INIT) {
-
-        kp << 600, 500, 250, 120;
-        kd << 30, 20, 15, 5;
+        , state(State::INIT)
+    {
+        // keep your shapes
+        kp << 750, 1000, 400, 200;
+        kd << 8.3, 8, 3.3, 0.8;
+        cf << 0.375, 0.4, 0.2, 0.1;
 
         if (em != NULL) {
             em->startManaging(*this);
         }
     }
 
-    virtual ~Leader() {
-        this->mandatoryCleanUp();
-    }
+    virtual ~Leader() { this->mandatoryCleanUp(); }
+    virtual bool inputsValid() { return true; }
 
-    bool isLinked() const {
-        return state == State::LINKED;
-    }
-    void tryLink() {
-        BARRETT_SCOPED_LOCK(this->getEmMutex());
-        state = State::LINKED;
-    }
-    void unlink() {
-        BARRETT_SCOPED_LOCK(this->getEmMutex());
-        state = State::UNLINKED;
-    }
+    bool isLinked() const { return state == State::LINKED; }
+    void tryLink()        { BARRETT_SCOPED_LOCK(this->getEmMutex()); state = State::LINKED; }
+    void unlink()         { BARRETT_SCOPED_LOCK(this->getEmMutex()); state = State::UNLINKED; }
 
   protected:
+    // Output value holders
     typename Output<jt_type>::Value* jtOutputValue;
+    typename Output<jp_type>::Value* theirJPOutputValue;
+
+    // Local arm state
     jp_type wamJP;
     jv_type wamJV;
     jt_type extTorque;
+    jt_type wamGrav;
+    jt_type wamDyn;
+
+    // Wrist vectors (3-DOF)
+    haptic_wrist::jp_type wristJP;      // local wrist pos
+    haptic_wrist::jv_type wristJV;      // local wrist vel
+    haptic_wrist::jp_type theirWristJp; // received wrist pos
+
+    // Network payloads: DOF + 3
     Eigen::Matrix<double, DOF + 3, 1> sendJpMsg;
     Eigen::Matrix<double, DOF + 3, 1> sendJvMsg;
     Eigen::Matrix<double, DOF + 3, 1> sendExtTorqueMsg;
@@ -73,36 +89,54 @@ class Leader : public barrett::systems::System {
     using ReceivedData = typename UDPHandler<DOF + 3>::ReceivedData;
 
     virtual void operate() {
-
-        // TODO: change back to 1.5, likely need to scale vel as well
+        // optional joint scaling for wrist axes
         double j5_scale = 1.0;
         double j7_scale = 1.0;
 
-        wamJP = wamJPIn.getValue();
-        wamJV = wamJVIn.getValue();
-        extTorque = extTorqueIn.getValue();
+        // Read WAM inputs
+        wamJP  = wamJPIn.getValue();
+        wamJV  = wamJVIn.getValue();
+        wamGrav = wamGravIn.getValue();
+        wamDyn  = wamDynIn.getValue();
 
+        if (extTorqueIn.valueDefined()) {
+            extTorque = extTorqueIn.getValue();
+        } else {
+            extTorque.setZero();
+        }
+
+        // Read wrist device (if available)
         haptic_wrist::jp_type wristJP = hw->getPosition();
         haptic_wrist::jp_type wristJV = hw->getVelocity();
+
+        // Pack outgoing messages (arm + wrist)
         sendJpMsg << wamJP, wristJP;
         sendJvMsg << wamJV, wristJV;
-        sendExtTorqueMsg << extTorque, 0, 0, 0;
+
+        // Only arm external torque is meaningful here; pad wrist torques with zeros
+        sendExtTorqueMsg << extTorque, 0.0, 0.0, 0.0;
+
+        // Example scaling of J5 and J7 (index 4 and 6 in the concatenated vector)
         sendJpMsg(4) = j5_scale * sendJpMsg(4);
         sendJpMsg(6) = j7_scale * sendJpMsg(6);
 
         udp_handler.send(sendJpMsg, sendJvMsg, sendExtTorqueMsg);
 
+        // receive peer
         boost::optional<ReceivedData> received_data = udp_handler.getLatestReceived();
         auto now = std::chrono::steady_clock::now();
         if (received_data && (now - received_data->timestamp <= TIMEOUT_DURATION)) {
-
-            theirJp = received_data->jp.template head<DOF>();
-            theirWristJp = received_data->jp.template tail<3>();
-            theirWristJp(0) = theirWristJp(0) / j5_scale;
-            theirWristJp(2) = theirWristJp(2) / j7_scale;
-
-            theirJv = received_data->jv.template head<DOF>();
+            theirJp        = received_data->jp.template head<DOF>();
+            theirWristJp   = received_data->jp.template tail<3>();
+            theirJv        = received_data->jv.template head<DOF>();
             theirExtTorque = received_data->extTorque.template head<DOF>();
+
+            // undo scaling
+            theirWristJp(0) /= j5_scale;
+            theirWristJp(2) /= j7_scale;
+
+            theirJPOutputValue->setData(&theirJp);
+
         } else {
             if (state == State::LINKED) {
                 std::cout << "lost link" << std::endl;
@@ -110,49 +144,62 @@ class Leader : public barrett::systems::System {
             }
         }
 
+        // state machine
         switch (state) {
             case State::INIT:
-                // Used so haptic wirst holds on moveTo command
+                hw->setTarget(wristJP); // hold
                 control.setZero();
                 jtOutputValue->setData(&control);
                 break;
+
             case State::LINKED:
-                // Active teleop. Only the callee can transition to LINKED
-                hw->setPosition(theirWristJp);
-                control = compute_control(theirJp, theirJv, theirExtTorque, wamJP, wamJV);
+                hw->setTarget(theirWristJp);
+                control = compute_control(
+                    theirJp, theirJv, theirExtTorque,
+                    wamJP,   wamJV,   extTorque,
+                    wamGrav, wamDyn
+                );
                 jtOutputValue->setData(&control);
                 break;
+
             case State::UNLINKED:
-                // Changed to unlinked with either timeout or callee.
-                hw->setPosition(wristJP);
+                hw->setTarget(wristJP);
                 control.setZero();
                 jtOutputValue->setData(&control);
                 break;
         }
     }
 
+    // peer arm state & control
     jp_type theirJp;
-    jp_type theirJv;
+    jv_type theirJv;
     jt_type theirExtTorque;
     jt_type control;
-    haptic_wrist::jp_type theirWristJp;
 
   private:
     DISALLOW_COPY_AND_ASSIGN(Leader);
-    haptic_wrist::HapticWrist* hw;
+    haptic_wrist::HapticWrist* hw;     // may be nullptr
     std::mutex state_mutex;
-    jp_type joint_positions;
     UDPHandler<DOF + 3> udp_handler;
     const std::chrono::milliseconds TIMEOUT_DURATION = std::chrono::milliseconds(20);
     State state;
-    Eigen::Vector4d kp;
-    Eigen::Vector4d kd;
 
-    jt_type compute_control(const jp_type& ref_pos, const jv_type& ref_vel, const jt_type& feedforward,
-                            const jp_type& cur_pos, const jv_type& cur_vel) {
-        jt_type pos_term = kp.asDiagonal() * (ref_pos - cur_pos);
-        jt_type vel_term = kd.asDiagonal() * (ref_vel - cur_vel);
-        jt_type feedforward_term = 0.4 * feedforward;
-        return pos_term + vel_term - feedforward_term;
-    };
+    Eigen::Matrix<double, DOF, 1> kp;
+    Eigen::Matrix<double, DOF, 1> kd;
+    Eigen::Matrix<double, DOF, 1> cf;
+
+    // your menu (default u4: Lawrence + dyn comp)
+    jt_type compute_control(const jp_type& ref_pos, const jv_type& ref_vel, const jt_type& ref_extTorque,
+                            const jp_type& cur_pos, const jv_type& cur_vel, const jt_type& cur_extTorque,
+                            const jt_type& cur_grav, const jt_type& cur_dyn) {
+        jt_type u1 = 0.0 * cur_extTorque;
+        jt_type u2 = cur_dyn - cur_grav;
+        jt_type u3 = -0.5 * ref_extTorque;
+        jt_type u4 = -0.5 * ref_extTorque + cur_dyn - cur_grav; // Lawrence ideal
+        jt_type u5 = -0.5 * ref_extTorque - 0.15 * (ref_extTorque + cur_extTorque);
+        jt_type u6 = -0.5 * ref_extTorque - 0.15 * (ref_extTorque + cur_extTorque) + cur_dyn - cur_grav;
+        jt_type u7 = -0.5 * cur_extTorque;
+        jt_type u8 = -0.25 * (ref_extTorque + cur_extTorque);
+        return u4;
+    }
 };
