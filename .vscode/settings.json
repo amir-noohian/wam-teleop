@@ -1,7 +1,6 @@
 {
     "files.associations": {
-        "iostream": "cpp",
-        "condition_variable": "cpp",
+        "dense": "cpp",
         "cctype": "cpp",
         "clocale": "cpp",
         "cmath": "cpp",
@@ -22,6 +21,7 @@
         "chrono": "cpp",
         "codecvt": "cpp",
         "complex": "cpp",
+        "condition_variable": "cpp",
         "cstdint": "cpp",
         "deque": "cpp",
         "list": "cpp",
@@ -51,6 +51,7 @@
         "initializer_list": "cpp",
         "iomanip": "cpp",
         "iosfwd": "cpp",
+        "iostream": "cpp",
         "istream": "cpp",
         "limits": "cpp",
         "mutex": "cpp",
