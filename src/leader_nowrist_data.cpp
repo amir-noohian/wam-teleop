@@ -7,10 +7,12 @@
  *      Author: Brian Zenowich
  */
 
+// The same as leader_nowrist_data.cpp, but the data is recorded.
+
 #include <cstdlib>  // For mkstmp()
 #include <cstdio>  // For remove()
 
-#include "external_torque.h"
+#include "lib/external_torque.h"
 #include <iostream>
 #include <string>
 
@@ -27,10 +29,10 @@
 #define BARRETT_SMF_VALIDATE_ARGS
 #include <barrett/standard_main_function.h>
 
-#include "leader_nowrist_data.h"
-#include "background_state_publisher.h"
-#include "leader_dynamics.h"
-#include "dynamic_external_torque.h"
+#include "lib/leader_nowrist_data.h"
+#include "lib/background_state_publisher.h"
+#include "lib/leader_dynamics.h"
+#include "lib/dynamic_external_torque.h"
 
 using namespace barrett;
 using detail::waitForEnter;

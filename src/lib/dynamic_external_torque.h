@@ -1,3 +1,5 @@
+// External torque is estimated using estimated dynamics.
+
 #pragma once
 
 #include <barrett/detail/ca_macro.h>

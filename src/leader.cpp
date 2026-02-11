@@ -8,7 +8,9 @@
  *  Updated: 2025-11-07  (add haptic wrist support)
  */
 
-#include "external_torque.h"
+// This a version of 4-DOF leader equiped with a haptic wrist.
+
+#include "lib/external_torque.h"
 #include <iostream>
 #include <string>
 
@@ -25,11 +27,11 @@
 
 // ==== CHANGED: use wrist-capable Leader and wrist headers ====
 #include <haptic_wrist/haptic_wrist.h>
-#include "leader.h"                         // was "leader_nowrist.h"
-#include "background_state_publisher.h"
-#include "leader_dynamics.h"
-#include "dynamic_external_torque.h"
-#include "leader_vertical_dynamics.h"
+#include "lib/leader.h"                         // was "leader_nowrist.h"
+#include "lib/background_state_publisher.h"
+#include "lib/leader_dynamics.h"
+#include "lib/dynamic_external_torque.h"
+// #include "lib/leader_vertical_dynamics.h"
 
 using namespace barrett;
 using detail::waitForEnter;
@@ -87,10 +89,10 @@ int wam_main(int argc, char **argv, ProductManager &pm, systems::Wam<DOF> &wam) 
     pm.getExecutionManager()->startManaging(customjtSum);
 
     LeaderDynamics<DOF> leaderDynamics(pm.getExecutionManager());
-    LeaderDynamics<DOF> horizontalGravity(pm.getExecutionManager());
+    // LeaderDynamics<DOF> horizontalGravity(pm.getExecutionManager());
     ExternalTorque<DOF> externalTorque(pm.getExecutionManager());
     DynamicExternalTorque<DOF> dynamicExternalTorque(pm.getExecutionManager());
-    LeaderVerticalDynamics<DOF> leaderVerticalDynamics(pm.getExecutionManager());
+    // LeaderVerticalDynamics<DOF> leaderVerticalDynamics(pm.getExecutionManager());
 
     // Filters (unchanged)
     barrett::systems::FirstOrderFilter<jt_type> extFilter;
@@ -139,36 +141,29 @@ int wam_main(int argc, char **argv, ProductManager &pm, systems::Wam<DOF> &wam) 
     systems::connect(jaWAM.output, jaFilter.input);
     systems::connect(jaFilter.output, leaderDynamics.jaInputDynamics);
 
-    systems::connect(wam.jpOutput, horizontalGravity.jpInputDynamics);
-    systems::connect(zeroVelocity.output, horizontalGravity.jvInputDynamics);
-    systems::connect(zeroAcceleration.output, horizontalGravity.jaInputDynamics);
-
-    systems::connect(leaderDynamics.dynamicsFeedFWD, leaderVerticalDynamics.leaderDynamicsIn);
-    systems::connect(horizontalGravity.dynamicsFeedFWD, leaderVerticalDynamics.horizontalGravityIn);
-    systems::connect(wam.gravity.output, leaderVerticalDynamics.gravityIn);
-
     systems::connect(wam.jpOutput, leader.wamJPIn);
     systems::connect(wam.jvOutput, leader.wamJVIn);
+    // systems::connect(dynamicExtFilter.output, leader.extTorqueIn);
+    systems::connect(dynamicExternalTorque.wamExternalTorqueOut, leader.extTorqueIn);
 
-    // You were using dynamicExternalTorque as the ext torque source to Leader:
     systems::connect(wam.jpOutput, leaderDynamics.jpInputDynamics);
     systems::connect(wam.jvOutput, leaderDynamics.jvInputDynamics);
+    // systems::connect(zeroAcceleration.output, leaderDynamics.jaInputDynamics);
 
     systems::connect(leader.wamJPOutput, customjtSum.getInput(0));
     systems::connect(wam.gravity.output, customjtSum.getInput(1));
     systems::connect(wam.supervisoryController.output, customjtSum.getInput(2));
 
+    // systems::connect(wam.gravity.output, externalTorque.wamGravityIn);
+    // systems::connect(customjtSum.output, externalTorque.wamTorqueSumIn);
+    // systems::connect(externalTorque.wamExternalTorqueOut, extFilter.input);
+
     systems::connect(customjtSum.output, dynamicExternalTorque.wamTorqueSumIn);
-    systems::connect(leaderVerticalDynamics.leaderVerticalDynamicsOut, dynamicExternalTorque.wamDynamicsIn);
-
-    systems::connect(wam.gravity.output, leader.wamGravIn);
-    systems::connect(leaderVerticalDynamics.leaderVerticalDynamicsOut, leader.wamDynIn);
-
+    systems::connect(leaderDynamics.dynamicsFeedFWD, dynamicExternalTorque.wamDynamicsIn);
     systems::connect(dynamicExternalTorque.wamExternalTorqueOut, dynamicExtFilter.input);
 
-    // Feed the same (filtered) dynamic external torque into the Leader:
-    systems::connect(dynamicExternalTorque.wamExternalTorqueOut, leader.extTorqueIn);
-    // (alternatively: systems::connect(dynamicExtFilter.output, leader.extTorqueIn);)
+    systems::connect(wam.gravity.output, leader.wamGravIn);
+    systems::connect(leaderDynamics.dynamicsFeedFWD, leader.wamDynIn);
 
     // Optional prints (leave commented to avoid loop jitter)
     // systems::connect(dynamicExternalTorque.wamExternalTorqueOut, printdynamicextTorque.input);

@@ -1,3 +1,5 @@
+// External torque is estimated using only gravity rather than dynamics.
+
 #pragma once
 
 #include <barrett/detail/ca_macro.h>
