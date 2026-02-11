@@ -1,3 +1,7 @@
+# Note
+This version of code is for vertical mounting configuration of WAM teleop setup. 
+
+
 # Wam Teleop
 This package enables teleoperation between the 4DOF leader with the haptic wrist and the 7DOF follower. While this is a ros package, communication between WAMs does not use ros, and instead uses UDP. Ros is only used to publish the state of arm for easier data collection, and is not intended to receive any incoming messages or services to control the arm. 
 

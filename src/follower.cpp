@@ -7,7 +7,7 @@
  *      Author: Brian Zenowich
  */
 
-#include "external_torque.h"
+#include "lib/external_torque.h"
 #include <iostream>
 #include <string>
 
@@ -22,11 +22,11 @@
 #define BARRETT_SMF_VALIDATE_ARGS
 #include <barrett/standard_main_function.h>
 
-#include "follower.h"
-#include "background_state_publisher.h"
-#include "follower_dynamics.h"
-#include "dynamic_external_torque.h"
-#include "follower_vertical_dynamics.h"
+#include "lib/follower.h"
+#include "lib/background_state_publisher.h"
+#include "lib/follower_dynamics.h"
+#include "lib/dynamic_external_torque.h"
+#include "lib/follower_vertical_dynamics.h"
 
 using namespace barrett;
 using detail::waitForEnter;

@@ -13,10 +13,13 @@
 #include "ros/ros.h"
 #include <barrett/standard_main_function.h>
 
-#include "background_state_publisher.h"
-#include "leader.h"
-#include "tool_frame_cb.h"
-#include "external_torque.h"
+#include <haptic_wrist/haptic_wrist.h>
+#include "lib/external_torque.h"
+#include "lib/leader.h"
+#include "lib/background_state_publisher.h"
+#include "lib/leader_dynamics.h"
+#include "lib/dynamic_external_torque.h"
+#include "lib/leader_vertical_dynamics.h"
 
 using namespace barrett;
 using detail::waitForEnter;
@@ -44,9 +47,9 @@ int wam_main(int argc, char** argv, ProductManager& pm, systems::Wam<DOF>& wam) 
     jp_type SYNC_POS; // the position each WAM should move to before linking
     if (DOF == 4) {
         SYNC_POS[0] = 0.0;
-        SYNC_POS[1] = -1.5;
+        SYNC_POS[1] = -1.57;
         SYNC_POS[2] = 0.0;
-        SYNC_POS[3] = 2.7;
+        SYNC_POS[3] = 0.0;
 
     } else {
         printf("Error: Only 4 DOF wam supported\n");
@@ -73,25 +76,107 @@ int wam_main(int argc, char** argv, ProductManager& pm, systems::Wam<DOF>& wam) 
     ros::init(argc, argv, "leader");
     BackgroundStatePublisher<DOF> state_publisher(pm.getExecutionManager(), wam, &hw);
 
-    ToolFrameCb toolframeCb(&hw);
-    systems::connect(wam.toolPose.output, toolframeCb.input);
-    pm.getExecutionManager()->startManaging(toolframeCb);
+    // ToolFrameCb toolframeCb(&hw);
+    // systems::connect(wam.toolPose.output, toolframeCb.input);
+    // pm.getExecutionManager()->startManaging(toolframeCb);
+
+    barrett::systems::Summer<jt_type, 3> customjtSum;
+    pm.getExecutionManager()->startManaging(customjtSum);
+
+    LeaderDynamics<DOF> leaderDynamics(pm.getExecutionManager());
+
+    LeaderDynamics<DOF> horizontalGravity(pm.getExecutionManager());
 
     ExternalTorque<DOF> externalTorque(pm.getExecutionManager());
-    systems::connect(wam.gravity.output, externalTorque.wamGravityIn);
-    systems::connect(wam.jtSum.output, externalTorque.wamTorqueSumIn);
 
+    DynamicExternalTorque<DOF> dynamicExternalTorque(pm.getExecutionManager());
+
+    LeaderVerticalDynamics<DOF> leaderVerticalDynamics(pm.getExecutionManager());
+
+    
     barrett::systems::FirstOrderFilter<jt_type> extFilter;
     jt_type omega_p(180.0);
     extFilter.setLowPass(omega_p);
     pm.getExecutionManager()->startManaging(extFilter);
 
-    systems::connect(externalTorque.wamExternalTorqueOut, extFilter.input);
+    barrett::systems::FirstOrderFilter<jt_type> dynamicExtFilter;
+    // jt_type omega_p(180.0);
+    dynamicExtFilter.setLowPass(omega_p);
+    pm.getExecutionManager()->startManaging(dynamicExtFilter);
+
+    jv_type jv;
+    jv.setConstant(0.0);
+    systems::Constant<jv_type> zeroVelocity(jv);
+    pm.getExecutionManager()->startManaging(zeroVelocity);
+
+    ja_type ja;
+    ja.setConstant(0.0);
+    systems::Constant<ja_type> zeroAcceleration(ja);
+    pm.getExecutionManager()->startManaging(zeroAcceleration);
 
     Leader<DOF> leader(pm.getExecutionManager(), &hw, remoteHost, rec_port, send_port);
+
+    jt_type maxRate; // Nm · s-1 per joint
+    maxRate << 50, 50, 50, 50;
+    systems::RateLimiter<jt_type> wamJPOutputRamp(maxRate, "ffRamp");
+
+    systems::PrintToStream<jt_type> printdynamicextTorque(pm.getExecutionManager(), "dynamicextTorque: ");
+    systems::PrintToStream<jt_type> printextTorque(pm.getExecutionManager(), "extTorque: ");
+    systems::PrintToStream<jt_type> printdynamicoutput(pm.getExecutionManager(), "dynamicoutput: ");
+    systems::PrintToStream<jt_type> printSC(pm.getExecutionManager(), "SC: ");
+    // systems::PrintToStream<jt_type> printjtSum(pm.getExecutionManager(), "jtSum: ");
+    // systems::PrintToStream<jt_type> printcustomjtSum(pm.getExecutionManager(), "customjtSum: ");
+
+    double h_omega_p = 25.0;
+    barrett::systems::FirstOrderFilter<jv_type> hp1;
+    hp1.setHighPass(jv_type(h_omega_p), jv_type(h_omega_p));
+    systems::Gain<jv_type, double, ja_type> jaWAM(1.0);
+    pm.getExecutionManager()->startManaging(hp1);
+
+    barrett::systems::FirstOrderFilter<ja_type> jaFilter;
+    ja_type l_omega_p = ja_type::Constant(50.0);
+    jaFilter.setLowPass(l_omega_p);
+    pm.getExecutionManager()->startManaging(jaFilter);
+
+
+    systems::connect(wam.jvOutput, hp1.input);
+    systems::connect(hp1.output, jaWAM.input);
+    systems::connect(jaWAM.output, jaFilter.input);
+    systems::connect(jaFilter.output, leaderDynamics.jaInputDynamics);
+
+    systems::connect(wam.jpOutput, horizontalGravity.jpInputDynamics);
+    systems::connect(zeroVelocity.output, horizontalGravity.jvInputDynamics);
+    systems::connect(zeroAcceleration.output, horizontalGravity.jaInputDynamics);
+
+    systems::connect(leaderDynamics.dynamicsFeedFWD, leaderVerticalDynamics.leaderDynamicsIn);
+    systems::connect(horizontalGravity.dynamicsFeedFWD, leaderVerticalDynamics.horizontalGravityIn);
+    systems::connect(wam.gravity.output, leaderVerticalDynamics.gravityIn);
+
     systems::connect(wam.jpOutput, leader.wamJPIn);
     systems::connect(wam.jvOutput, leader.wamJVIn);
-    systems::connect(extFilter.output, leader.extTorqueIn);
+    // systems::connect(dynamicExtFilter.output, leader.extTorqueIn);
+    systems::connect(dynamicExternalTorque.wamExternalTorqueOut, leader.extTorqueIn);
+
+    systems::connect(wam.jpOutput, leaderDynamics.jpInputDynamics);
+    systems::connect(wam.jvOutput, leaderDynamics.jvInputDynamics);
+    // systems::connect(zeroAcceleration.output, leaderDynamics.jaInputDynamics);
+
+    systems::connect(leader.wamJPOutput, customjtSum.getInput(0));
+    systems::connect(wam.gravity.output, customjtSum.getInput(1));
+    systems::connect(wam.supervisoryController.output, customjtSum.getInput(2));
+
+    // systems::connect(wam.gravity.output, externalTorque.wamGravityIn);
+    // systems::connect(customjtSum.output, externalTorque.wamTorqueSumIn);
+    // systems::connect(externalTorque.wamExternalTorqueOut, extFilter.input);
+
+    systems::connect(customjtSum.output, dynamicExternalTorque.wamTorqueSumIn);
+    systems::connect(leaderVerticalDynamics.leaderVerticalDynamicsOut, dynamicExternalTorque.wamDynamicsIn);
+
+    systems::connect(wam.gravity.output, leader.wamGravIn);
+    systems::connect(leaderVerticalDynamics.leaderVerticalDynamicsOut, leader.wamDynIn);
+
+    systems::connect(dynamicExternalTorque.wamExternalTorqueOut, dynamicExtFilter.input);
+
 
     wam.gravityCompensate();
 
