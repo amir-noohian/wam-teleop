@@ -1,5 +1,9 @@
 # Note
-This version of code is for vertical mounting configuration of WAM teleop setup. 
+This version of code is for vertical mounting configuration of WAM teleop setup. Please note that you need to change the world_to_base matrix and home position vector in the config files.
+
+If you want to do the gravity calibration in vertical configuration, other than world_to_base matrix and home position vector, you need to change the gravitycal and zerocal poses in the config files as well.
+
+Also, note that there can be two vertical configuration (-90 or 90 degree). We used the vertical configuration descriped by [Barrett](https://web.barrett.com/support/WAM_Documentation/Libbarrett_WAM_Vertical_Mount_Instructions.pdf) for RISEx 2026 demo.
 
 
 # Wam Teleop
