@@ -7,8 +7,7 @@
  *      Author: Brian Zenowich
  */
 
-// This a version of 4-DOF leader without haptic wrist (the haptic wrist is
-// considered as a rigid link)
+// A version of 7-DOF follower.
 
 #include "lib/external_torque.h"
 #include <iostream>
@@ -27,8 +26,8 @@
 
 #include "lib/background_state_publisher.h"
 #include "lib/dynamic_external_torque.h"
-#include "lib/leader_dynamics.h"
-#include "lib/leader_nowrist.h"
+#include "lib/follower_dynamics.h"
+#include "lib/follower_policy.h"
 
 using namespace barrett;
 using detail::waitForEnter;
@@ -48,7 +47,7 @@ bool validate_args(int argc, char **argv) {
   if ((argc == 2 &&
        (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) ||
       (argc > 4)) {
-    printUsage(argv[0], "127.0.0.1", 5555, 5554);
+    printUsage(argv[0], "127.0.0.1", 5554, 5555);
     return 0;
   }
 
@@ -61,23 +60,25 @@ int wam_main(int argc, char **argv, ProductManager &pm,
   BARRETT_UNITS_TEMPLATE_TYPEDEFS(DOF);
 
   jp_type SYNC_POS; // the position each WAM should move to before linking
-  if (DOF == 4) {
+  if (DOF == 7) {
     SYNC_POS[0] = 0.0;
     SYNC_POS[1] = -1.95;
     SYNC_POS[2] = 0.0;
     SYNC_POS[3] = 2.97;
-    // SYNC_POS[4] = 0.0;
-    // SYNC_POS[5] = 0.0;
-    // SYNC_POS[6] = 0.0;
+    SYNC_POS[4] = 0.0;
+    SYNC_POS[5] = 0.0;
+    SYNC_POS[6] = 0.0;
 
   } else {
-    printf("Error: 4 DOF supported\n");
+    printf("Error: 7 DOF supported\n");
     return false;
   }
 
   std::string remoteHost = "127.0.0.1";
-  int rec_port = 5555;
-  int send_port = 5554;
+  int rec_port = 5554;
+  int send_port = 5555;
+  int policy_rec_port = 5556;
+  int policy_send_port = 5557;
 
   if (argc >= 2) {
     remoteHost = std::string(argv[1]);
@@ -88,14 +89,20 @@ int wam_main(int argc, char **argv, ProductManager &pm,
   if (argc >= 4) {
     send_port = std::atoi(argv[3]);
   }
+  if (argc >= 5) {
+    policy_rec_port = std::atoi(argv[4]);
+  }
+  if (argc >= 6) {
+    policy_send_port = std::atoi(argv[5]);
+  }
 
-  ros::init(argc, argv, "leader_nowrist");
+  ros::init(argc, argv, "follower");
   BackgroundStatePublisher<DOF> state_publisher(pm.getExecutionManager(), wam);
 
   barrett::systems::Summer<jt_type, 3> customjtSum;
   pm.getExecutionManager()->startManaging(customjtSum);
 
-  LeaderDynamics<DOF> leaderDynamics(pm.getExecutionManager());
+  FollowerDynamics<DOF> followerDynamics(pm.getExecutionManager());
 
   ExternalTorque<DOF> externalTorque(pm.getExecutionManager());
 
@@ -106,17 +113,13 @@ int wam_main(int argc, char **argv, ProductManager &pm,
   extFilter.setLowPass(omega_p);
   pm.getExecutionManager()->startManaging(extFilter);
 
-  barrett::systems::FirstOrderFilter<jt_type> dynamicExtFilter;
-  // jt_type omega_p(180.0);
-  dynamicExtFilter.setLowPass(omega_p);
-  pm.getExecutionManager()->startManaging(dynamicExtFilter);
-
   ja_type ja;
   ja.setConstant(0.0);
   systems::Constant<ja_type> zeroAcceleration(ja);
   pm.getExecutionManager()->startManaging(zeroAcceleration);
 
-  Leader<DOF> leader(pm.getExecutionManager(), remoteHost, rec_port, send_port);
+  FollowerPolicy<DOF> follower(pm.getExecutionManager(), remoteHost, rec_port,
+                               send_port, policy_rec_port, policy_send_port);
 
   jt_type maxRate; // Nm · s-1 per joint
   maxRate << 50, 50, 50, 50;
@@ -124,14 +127,10 @@ int wam_main(int argc, char **argv, ProductManager &pm,
 
   systems::PrintToStream<jt_type> printdynamicextTorque(
       pm.getExecutionManager(), "dynamicextTorque: ");
-  systems::PrintToStream<jt_type> printextTorque(pm.getExecutionManager(),
-                                                 "extTorque: ");
-  systems::PrintToStream<jt_type> printdynamicoutput(pm.getExecutionManager(),
-                                                     "dynamicoutput: ");
   systems::PrintToStream<jt_type> printSC(pm.getExecutionManager(), "SC: ");
-  // systems::PrintToStream<jt_type> printjtSum(pm.getExecutionManager(),
-  // "jtSum: "); systems::PrintToStream<jt_type>
-  // printcustomjtSum(pm.getExecutionManager(), "customjtSum: ");
+
+  // systems::PrintToStream<jt_type> printcustomjtSum(pm.getExecutionManager(),
+  // "customjtSum: ");
 
   double h_omega_p = 25.0;
   barrett::systems::FirstOrderFilter<jv_type> hp1;
@@ -147,44 +146,39 @@ int wam_main(int argc, char **argv, ProductManager &pm,
   systems::connect(wam.jvOutput, hp1.input);
   systems::connect(hp1.output, jaWAM.input);
   systems::connect(jaWAM.output, jaFilter.input);
-  systems::connect(jaFilter.output, leaderDynamics.jaInputDynamics);
+  systems::connect(jaFilter.output, followerDynamics.jaInputDynamics);
 
-  systems::connect(wam.jpOutput, leader.wamJPIn);
-  systems::connect(wam.jvOutput, leader.wamJVIn);
-  // systems::connect(dynamicExtFilter.output, leader.extTorqueIn);
+  systems::connect(wam.jpOutput, follower.wamJPIn);
+  systems::connect(wam.jvOutput, follower.wamJVIn);
+  // systems::connect(extFilter.output, follower.extTorqueIn);
   systems::connect(dynamicExternalTorque.wamExternalTorqueOut,
-                   leader.extTorqueIn);
+                   follower.extTorqueIn);
 
-  systems::connect(wam.jpOutput, leaderDynamics.jpInputDynamics);
-  systems::connect(wam.jvOutput, leaderDynamics.jvInputDynamics);
-  // systems::connect(zeroAcceleration.output, leaderDynamics.jaInputDynamics);
+  systems::connect(wam.jpOutput, followerDynamics.jpInputDynamics);
+  systems::connect(wam.jvOutput, followerDynamics.jvInputDynamics);
+  // systems::connect(zeroAcceleration.output,
+  // followerDynamics.jaInputDynamics);
 
-  systems::connect(leader.wamJPOutput, customjtSum.getInput(0));
+  systems::connect(follower.wamJPOutput, customjtSum.getInput(0));
   systems::connect(wam.gravity.output, customjtSum.getInput(1));
   systems::connect(wam.supervisoryController.output, customjtSum.getInput(2));
 
-  // systems::connect(wam.gravity.output, externalTorque.wamGravityIn);
-  // systems::connect(customjtSum.output, externalTorque.wamTorqueSumIn);
-  // systems::connect(externalTorque.wamExternalTorqueOut, extFilter.input);
-
   systems::connect(customjtSum.output, dynamicExternalTorque.wamTorqueSumIn);
-  systems::connect(leaderDynamics.dynamicsFeedFWD,
+  systems::connect(followerDynamics.dynamicsFeedFWD,
                    dynamicExternalTorque.wamDynamicsIn);
-  systems::connect(dynamicExternalTorque.wamExternalTorqueOut,
-                   dynamicExtFilter.input);
 
-  systems::connect(wam.gravity.output, leader.wamGravIn);
-  systems::connect(leaderDynamics.dynamicsFeedFWD, leader.wamDynIn);
+  systems::connect(wam.gravity.output, follower.wamGravIn);
+  systems::connect(followerDynamics.dynamicsFeedFWD, follower.wamDynIn);
 
+  systems::connect(dynamicExternalTorque.wamExternalTorqueOut, extFilter.input);
+
+  // systems::connect(extFilter.output, printdynamicextTorque.input);
   // systems::connect(dynamicExternalTorque.wamExternalTorqueOut,
-  // printdynamicextTorque.input); systems::connect(extFilter.output,
-  // printextTorque.input); systems::connect(wam.supervisoryController.output,
-  // printSC.input); systems::connect(leaderDynamics.dynamicsFeedFWD,
-  // printdynamicoutput.input);
-
-  // systems::connect(extFilter.output, printjtSum.input);
+  // printdynamicextTorque.input);
+  // systems::connect(wam.supervisoryController.output, printSC.input);
   // systems::connect(extFilter.output, printcustomjtSum.input);
 
+  // NOTE untested; connect external torque for logging purposes.
   systems::connect(dynamicExternalTorque.wamExternalTorqueOut,
                    state_publisher.exposedExternalTorque.input);
 
@@ -201,30 +195,48 @@ int wam_main(int argc, char **argv, ProductManager &pm,
 
     switch (line[0]) {
     case 'l':
-      if (leader.isLinked()) {
-        leader.unlink();
+      if (follower.isLinked()) {
+        follower.unlink();
       } else {
         wam.moveTo(SYNC_POS, true);
 
         printf("Press [Enter] to link with the other WAM.");
         waitForEnter();
-        leader.tryLink();
-        wam.trackReferenceSignal(leader.theirJPOutput);
-        connect(leader.wamJPOutput, wam.input);
-        // connect(leader.wamJPOutput, wamJPOutputRamp.input); // one of the
+        follower.tryLink();
+        wam.trackReferenceSignal(follower.theirJPOutput);
+        systems::connect(follower.wamJPOutput, wam.input);
+        // connect(follower.wamJPOutput, wamJPOutputRamp.input); // one of the
         // problem with the joint limiter is that it adds delay in applying
         // external torque to the robot. connect(wamJPOutputRamp.output,
         // wam.input); systems::forceConnect(wam.jtSum.output,
         // externalTorque.wamTorqueSumIn);
 
         btsleep(0.1); // wait an execution cycle or two
-        if (leader.isLinked()) {
+        if (follower.isLinked()) {
           printf("Linked with remote WAM.\n");
         } else {
           printf("WARNING: Linking was unsuccessful.\n");
         }
       }
 
+      break;
+
+    case 'p':
+      if (!follower.isLinked() && !follower.isRollingOut()) {
+        printf(
+            "Not linked with other WAM; cannot enable online policy tuning.\n");
+      } else if (follower.isRollingOut()) {
+        // If already rolling out, disable policy rollouts and switch back to
+        // following the leader
+        follower.disablePolicyRollouts();
+        wam.trackReferenceSignal(follower.theirJPOutput);
+        printf("Online policy tuning disabled - rollout stopped.\n");
+      } else {
+        // If linked, switch to policy rollouts
+        follower.switchToPolicyRollouts();
+        wam.trackReferenceSignal(follower.policyOutput);
+        printf("Online policy tuning enabled - rollout starting.\n");
+      }
       break;
 
     case 't':
