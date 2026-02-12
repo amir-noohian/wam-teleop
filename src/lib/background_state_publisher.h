@@ -83,6 +83,7 @@ public:
     joint_state.effort.resize(7);
 
     gravTorque.torque.resize(7);
+    externalTorque.torque.resize(7);
 
     pub_thread = std::thread(&BackgroundStatePublisher::run, this);
   }

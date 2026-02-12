@@ -228,7 +228,7 @@ private:
     jt_type u2 = -0.5 * ref_extTorque + cur_dyn - cur_grav;
 
     // for now p-p only. LATER SHOULD BE u1!!!
-    return u0;
+    return u1;
   }
 
   jt_type compute_control(const jp_type &ref_pos, const jv_type &ref_vel,
