@@ -86,10 +86,10 @@ int wam_main(int argc, char **argv, ProductManager &pm,
   // ==== CHANGED: node name to reflect wrist leader ====
   ros::init(argc, argv, "leader");
 
-  // ==== NEW: start the haptic wrist device ====
-  haptic_wrist::HapticWrist hw;
-  hw.gravityCompensate(true);
-  hw.run();
+    // ==== NEW: start the haptic wrist device ====
+    haptic_wrist::HapticWrist hw;
+    hw.gravityCompensate(false);
+    hw.run();
 
   // ==== CHANGED: pass &hw to state publisher so it can publish wrist states
   // ====
